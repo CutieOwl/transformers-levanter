@@ -202,6 +202,8 @@ class GPT2Attention(nn.Module):
             mask_value = torch.full([], mask_value, dtype=attn_weights.dtype).to(attn_weights.device)
             attn_weights = torch.where(causal_mask, attn_weights.to(attn_weights.dtype), mask_value)
 
+        print("attention_mask", attention_mask)
+        print("attn_weights", attn_weights.shape)
         if attention_mask is not None:
             # Apply the attention mask
             attn_weights = attn_weights + attention_mask
@@ -252,6 +254,8 @@ class GPT2Attention(nn.Module):
             mask_value = torch.tensor(mask_value, dtype=attn_weights.dtype).to(attn_weights.device)
             attn_weights = torch.where(causal_mask, attn_weights, mask_value)
 
+        print("uar attention_mask", attention_mask)
+        print("uar attn_weights", attn_weights.shape)
         if attention_mask is not None:
             # Apply the attention mask
             attn_weights = attn_weights + attention_mask
@@ -805,6 +809,7 @@ class GPT2Model(GPT2PreTrainedModel):
             position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
 
         # GPT2Attention mask.
+        print("attention_mask in GPT2Model", attention_mask)
         if attention_mask is not None:
             if batch_size <= 0:
                 raise ValueError("batch_size has to be defined and > 0")
@@ -851,6 +856,7 @@ class GPT2Model(GPT2PreTrainedModel):
             hidden_states = hidden_states + token_type_embeds
 
         hidden_states = self.drop(hidden_states)
+        print("hidden_states before attention", hidden_states.shape)
 
         output_shape = input_shape + (hidden_states.size(-1),)
 
@@ -931,6 +937,9 @@ class GPT2Model(GPT2PreTrainedModel):
         # Add last hidden state
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
+
+        print("output_shape", output_shape)
+        print("hidden_states after attention", hidden_states.shape)
 
         if not return_dict:
             return tuple(
@@ -1099,6 +1108,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             hidden_states = hidden_states.to(self.lm_head.weight.device)
 
         lm_logits = self.lm_head(hidden_states)
+        print("lm_logits shape", lm_logits.shape)
 
         loss = None
         if labels is not None:
