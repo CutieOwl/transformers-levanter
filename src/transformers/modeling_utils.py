@@ -1264,6 +1264,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
         If the `torchscript` flag is set in the configuration, can't handle parameter sharing so we are cloning the
         weights instead.
         """
+        '''
         if getattr(self.config, "tie_word_embeddings", True):
             output_embeddings = self.get_output_embeddings()
             if output_embeddings is not None:
@@ -1277,6 +1278,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
         for module in self.modules():
             if hasattr(module, "_tie_weights"):
                 module._tie_weights()
+        '''
 
     @staticmethod
     def _tie_encoder_decoder_weights(encoder: nn.Module, decoder: nn.Module, base_model_prefix: str):
@@ -2956,6 +2958,7 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
         is_quantized=False,
         keep_in_fp32_modules=None,
     ):
+        print("inside modified _load_pretrained_model")
         is_safetensors = False
         if is_quantized:
             from .utils.bitsandbytes import set_module_quantized_tensor_to_device
@@ -3097,6 +3100,9 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
         if len(cls.base_model_prefix) > 0 and hasattr(model, cls.base_model_prefix) and not has_prefix_module:
             model_to_load = getattr(model, cls.base_model_prefix)
             base_model_expected_keys = list(model_to_load.state_dict().keys())
+            print("loaded_keys", loaded_keys)
+            print("expected_keys_not_prefixed", expected_keys_not_prefixed)
+            print("base_model_expected_keys", base_model_expected_keys)
             if any(key in expected_keys_not_prefixed and key not in base_model_expected_keys for key in loaded_keys):
                 raise ValueError(
                     "The state dictionary of the model you are trying to load is corrupted. Are you sure it was "

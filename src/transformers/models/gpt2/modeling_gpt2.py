@@ -125,7 +125,7 @@ class GPT2Attention(nn.Module):
     def __init__(self, config, is_cross_attention=False, layer_idx=None):
         super().__init__()
 
-        max_positions = config.max_position_embeddings
+        max_positions = 342 #config.max_position_embeddings
         self.register_buffer(
             "bias",
             torch.tril(torch.ones((max_positions, max_positions), dtype=torch.bool)).view(
@@ -202,6 +202,9 @@ class GPT2Attention(nn.Module):
             mask_value = torch.full([], mask_value, dtype=attn_weights.dtype).to(attn_weights.device)
             attn_weights = torch.where(causal_mask, attn_weights.to(attn_weights.dtype), mask_value)
 
+        #print("attention_mask", attention_mask)
+        print("attention_mask shape", attention_mask)
+        print("attn_weights", attn_weights.shape)
         if attention_mask is not None:
             # Apply the attention mask
             attn_weights = attn_weights + attention_mask
@@ -254,6 +257,7 @@ class GPT2Attention(nn.Module):
 
         if attention_mask is not None:
             # Apply the attention mask
+            print("attention mask shape", attention_mask)
             attn_weights = attn_weights + attention_mask
 
         attn_weights = nn.functional.softmax(attn_weights, dim=-1)
@@ -676,11 +680,15 @@ class GPT2Model(GPT2PreTrainedModel):
         self.embed_dim = config.hidden_size
 
         self.wte = nn.Embedding(config.vocab_size, self.embed_dim)
-        self.wpe = nn.Embedding(config.max_position_embeddings, self.embed_dim)
+        self.wpe = nn.Embedding(1024, self.embed_dim) # nn.Embedding(config.max_position_embeddings, self.embed_dim) 
 
         self.drop = nn.Dropout(config.embd_pdrop)
         self.h = nn.ModuleList([GPT2Block(config, layer_idx=i) for i in range(config.num_hidden_layers)])
         self.ln_f = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_epsilon)
+
+        self.lm_head0 = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.lm_head1 = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.lm_head2 = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         # Model parallel
         self.model_parallel = False
@@ -852,7 +860,19 @@ class GPT2Model(GPT2PreTrainedModel):
 
         hidden_states = self.drop(hidden_states)
 
-        output_shape = input_shape + (hidden_states.size(-1),)
+        # We do our summing of the embeddings on hidden_states, 
+        # after position_embeds are added & dropout is done
+        #print("hidden_states shape", hidden_states.shape)
+        start_token = hidden_states[:,0,:]
+        sum_states = hidden_states[:,1::3,:] + hidden_states[:,2::3,:] + hidden_states[:,3::3,:]
+        hidden_states = torch.cat([start_token[:,None,:], sum_states], dim=1)
+        #print("new hidden_states shape", hidden_states.shape)
+
+        #print("input_shape", input_shape)
+        #print("hidden_states.size", hidden_states.size)
+        #print("hidden_states.size(-1)", hidden_states.size(-1))
+        output_shape = hidden_states.shape # + (hidden_states.size(-1),)
+        #print("desired output shape", output_shape)
 
         if self.gradient_checkpointing and self.training:
             if use_cache:
@@ -956,13 +976,12 @@ class GPT2Model(GPT2PreTrainedModel):
     GPT2_START_DOCSTRING,
 )
 class GPT2LMHeadModel(GPT2PreTrainedModel):
-    _keys_to_ignore_on_load_missing = [r"lm_head.weight"]
+    _keys_to_ignore_on_load_missing = [r"lm_head0.weight", r"lm_head1.weight", r"lm_head2.weight"]
     _keys_to_ignore_on_load_unexpected = [r"h\.\d+\.attn\.masked_bias", r"h\.\d+\.attn\.bias"]
 
     def __init__(self, config):
         super().__init__(config)
         self.transformer = GPT2Model(config)
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         # Model parallel
         self.model_parallel = False
@@ -987,7 +1006,9 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         )
         assert_device_map(self.device_map, len(self.transformer.h))
         self.transformer.parallelize(self.device_map)
-        self.lm_head = self.lm_head.to(self.transformer.first_device)
+        self.transformer.lm_head0 = self.transformer.lm_head0.to(self.transformer.first_device)
+        self.transformer.lm_head1 = self.transformer.lm_head1.to(self.transformer.first_device)
+        self.transformer.lm_head2 = self.transformer.lm_head2.to(self.transformer.first_device)
         self.model_parallel = True
 
     @add_start_docstrings(DEPARALLELIZE_DOCSTRING)
@@ -998,15 +1019,19 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         )
         self.transformer.deparallelize()
         self.transformer = self.transformer.to("cpu")
-        self.lm_head = self.lm_head.to("cpu")
+        self.transformer.lm_head0 = self.transformer.lm_head0.to("cpu")
+        self.transformer.lm_head1 = self.transformer.lm_head1.to("cpu")
+        self.transformer.lm_head2 = self.transformer.lm_head2.to("cpu")
         self.model_parallel = False
         torch.cuda.empty_cache()
 
     def get_output_embeddings(self):
-        return self.lm_head
+        return self.transformer.lm_head0, self.transformer.lm_head1, self.transformer.lm_head2
 
     def set_output_embeddings(self, new_embeddings):
-        self.lm_head = new_embeddings
+        self.lm_head0 = new_embeddings[0]
+        self.lm_head1 = new_embeddings[1]
+        self.lm_head2 = new_embeddings[2]
 
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, inputs_embeds=None, **kwargs):
         token_type_ids = kwargs.get("token_type_ids", None)
@@ -1096,9 +1121,18 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         # Set device for model parallelism
         if self.model_parallel:
             torch.cuda.set_device(self.transformer.first_device)
-            hidden_states = hidden_states.to(self.lm_head.weight.device)
+            hidden_states = hidden_states.to(self.transformer.lm_head0.weight.device)
 
-        lm_logits = self.lm_head(hidden_states)
+        lm_logits_0 = self.transformer.lm_head0(hidden_states)
+        lm_logits_1 = self.transformer.lm_head1(hidden_states)
+        lm_logits_2 = self.transformer.lm_head2(hidden_states)
+
+        #print("hidden states shape", hidden_states.shape)
+        lm_logits = torch.stack([lm_logits_0, lm_logits_1, lm_logits_2])
+        #print("stacked logits shape", lm_logits.shape)
+        lm_logits = lm_logits.reshape((lm_logits.shape[1], lm_logits.shape[2] * 3, -1))
+        lm_logits = lm_logits[:,:-2,:]
+        #print("lm logits shape", lm_logits.shape)   
 
         loss = None
         if labels is not None:
