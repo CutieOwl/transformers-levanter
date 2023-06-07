@@ -860,14 +860,14 @@ class GPT2Model(GPT2PreTrainedModel):
 
         # We do our summing of the embeddings on hidden_states, 
         # after position_embeds are added & dropout is done
-        #print("hidden_states shape before sum", hidden_states.shape)
+        print("hf hidden_states before sum", hidden_states)
         start_token = hidden_states[:,0,:]
         #raw_1 = hidden_states[:,1:,:]
         #raw_1 = raw_1.reshape((raw_1.shape[0], raw_1.shape[1] // 3, 3, -1))
         #raw_1 = raw_1.sum(axis=-2)
         sum_states = hidden_states[:,1::3,:] + hidden_states[:,2::3,:] + hidden_states[:,3::3,:]
         hidden_states = torch.cat([start_token[:,None,:], sum_states], dim=1)
-        #print("new hidden_states shape", hidden_states.shape)
+        print("hf hidden_states after sum", hidden_states)
 
         #print("input_shape", input_shape)
         #print("hidden_states.size", hidden_states.size)
@@ -953,7 +953,7 @@ class GPT2Model(GPT2PreTrainedModel):
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
 
-        #print("hidden_states after attention", hidden_states.shape)
+        print("hf hidden_states after attention", hidden_states)
 
         if not return_dict:
             return tuple(
@@ -1130,15 +1130,20 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             hidden_states = hidden_states.to(self.transformer.lm_head0.weight.device)
 
         lm_logits_0 = self.transformer.lm_head0(hidden_states)
+        print("hf lm_logits_0", lm_logits_0)
         lm_logits_1 = self.transformer.lm_head1(hidden_states)
+        print("hf lm_logits_1", lm_logits_1)
         lm_logits_2 = self.transformer.lm_head2(hidden_states)
+        print("hf lm_logits_2", lm_logits_2)
 
-        #print("hidden states shape", hidden_states.shape)
-        lm_logits = torch.stack([lm_logits_0, lm_logits_1, lm_logits_2])
-        #print("stacked logits shape", lm_logits.shape)
-        lm_logits = lm_logits.reshape((lm_logits.shape[1], lm_logits.shape[2] * 3, -1))
+        print("lm_logits_0 shape", lm_logits_0.shape)
+        lm_logits = torch.ones((lm_logits_0.shape[0], lm_logits_0.shape[1] * 3, lm_logits_0.shape[2]))
+        lm_logits[:,0::3,:] = lm_logits_0
+        lm_logits[:,1::3,:] = lm_logits_1
+        lm_logits[:,2::3,:] = lm_logits_2
         lm_logits = lm_logits[:,:-2,:]
-        #print("lm logits shape", lm_logits.shape)   
+        print("lm logits shape", lm_logits.shape)   
+        print("hf lm_logits", lm_logits)
 
         loss = None
         if labels is not None:
