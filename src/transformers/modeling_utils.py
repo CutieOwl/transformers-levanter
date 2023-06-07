@@ -1264,11 +1264,16 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
         If the `torchscript` flag is set in the configuration, can't handle parameter sharing so we are cloning the
         weights instead.
         """
+        print("called tie_weights")
+        # For uncond we actually don't want to tie word embeddings
+        # I just set it to true in the levanter code for convenience
+        # so we get rid of the following
         '''
-        if getattr(self.config, "tie_word_embeddings", True):
+        if getattr(self.config, "tie_word_embeddings", True): 
             output_embeddings = self.get_output_embeddings()
             if output_embeddings is not None:
                 self._tie_or_clone_weights(output_embeddings, self.get_input_embeddings())
+        '''
 
         if getattr(self.config, "is_encoder_decoder", False) and getattr(self.config, "tie_encoder_decoder", False):
             if hasattr(self, self.base_model_prefix):
@@ -1278,7 +1283,6 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
         for module in self.modules():
             if hasattr(module, "_tie_weights"):
                 module._tie_weights()
-        '''
 
     @staticmethod
     def _tie_encoder_decoder_weights(encoder: nn.Module, decoder: nn.Module, base_model_prefix: str):

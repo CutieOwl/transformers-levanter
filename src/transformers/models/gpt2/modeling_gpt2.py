@@ -203,8 +203,6 @@ class GPT2Attention(nn.Module):
             attn_weights = torch.where(causal_mask, attn_weights.to(attn_weights.dtype), mask_value)
 
         #print("attention_mask", attention_mask)
-        print("attention_mask shape", attention_mask)
-        print("attn_weights", attn_weights.shape)
         if attention_mask is not None:
             # Apply the attention mask
             attn_weights = attn_weights + attention_mask
@@ -257,7 +255,6 @@ class GPT2Attention(nn.Module):
 
         if attention_mask is not None:
             # Apply the attention mask
-            print("attention mask shape", attention_mask)
             attn_weights = attn_weights + attention_mask
 
         attn_weights = nn.functional.softmax(attn_weights, dim=-1)
@@ -813,6 +810,7 @@ class GPT2Model(GPT2PreTrainedModel):
             position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
 
         # GPT2Attention mask.
+        #print("attention_mask", attention_mask)
         if attention_mask is not None:
             if batch_size <= 0:
                 raise ValueError("batch_size has to be defined and > 0")
@@ -862,8 +860,11 @@ class GPT2Model(GPT2PreTrainedModel):
 
         # We do our summing of the embeddings on hidden_states, 
         # after position_embeds are added & dropout is done
-        #print("hidden_states shape", hidden_states.shape)
+        #print("hidden_states shape before sum", hidden_states.shape)
         start_token = hidden_states[:,0,:]
+        #raw_1 = hidden_states[:,1:,:]
+        #raw_1 = raw_1.reshape((raw_1.shape[0], raw_1.shape[1] // 3, 3, -1))
+        #raw_1 = raw_1.sum(axis=-2)
         sum_states = hidden_states[:,1::3,:] + hidden_states[:,2::3,:] + hidden_states[:,3::3,:]
         hidden_states = torch.cat([start_token[:,None,:], sum_states], dim=1)
         #print("new hidden_states shape", hidden_states.shape)
@@ -952,6 +953,8 @@ class GPT2Model(GPT2PreTrainedModel):
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
 
+        #print("hidden_states after attention", hidden_states.shape)
+
         if not return_dict:
             return tuple(
                 v
@@ -1026,9 +1029,12 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         torch.cuda.empty_cache()
 
     def get_output_embeddings(self):
+        print("called get_output_embeddings")
         return self.transformer.lm_head0, self.transformer.lm_head1, self.transformer.lm_head2
 
     def set_output_embeddings(self, new_embeddings):
+        print("called set_output_embeddings, new_embeddings shape", new_embeddings.shape)
+        print("new_embeddings", new_embeddings)
         self.lm_head0 = new_embeddings[0]
         self.lm_head1 = new_embeddings[1]
         self.lm_head2 = new_embeddings[2]
