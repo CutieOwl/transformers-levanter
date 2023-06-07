@@ -860,12 +860,21 @@ class GPT2Model(GPT2PreTrainedModel):
 
         # We do our summing of the embeddings on hidden_states, 
         # after position_embeds are added & dropout is done
-        #print("hf hidden_states before sum", hidden_states)
         start_token = hidden_states[:,0,:]
+        ##print("hidden_states shape", hidden_states.shape)
+        ##print("hf hidden_states before sum", hidden_states)
+        num_tokens_1 = max(0, hidden_states.shape[1] // 3)
+        num_tokens_2 = max(0, (hidden_states.shape[1]-1) // 3)
+        ##print("num_tokens_1", num_tokens_1, "num_tokens_2", num_tokens_2)
+        sum_states = hidden_states[:,1::3,:]
+        ##print("sum_states shape", sum_states.shape)
+        sum_states[:,:num_tokens_1,:] += hidden_states[:,2::3,:]
+        sum_states[:,:num_tokens_2,:] += hidden_states[:,3::3,:]
+        
         #raw_1 = hidden_states[:,1:,:]
         #raw_1 = raw_1.reshape((raw_1.shape[0], raw_1.shape[1] // 3, 3, -1))
         #raw_1 = raw_1.sum(axis=-2)
-        sum_states = hidden_states[:,1::3,:] + hidden_states[:,2::3,:] + hidden_states[:,3::3,:]
+        #sum_states = hidden_states[:,1::3,:] + hidden_states[:,2::3,:] + hidden_states[:,3::3,:]
         hidden_states = torch.cat([start_token[:,None,:], sum_states], dim=1)
         #print("hf hidden_states after sum", hidden_states)
 
