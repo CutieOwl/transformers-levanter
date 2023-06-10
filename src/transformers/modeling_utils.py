@@ -1265,15 +1265,12 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
         weights instead.
         """
         print("called tie_weights")
-        # For uncond we actually don't want to tie word embeddings
-        # I just set it to true in the levanter code for convenience
-        # so we get rid of the following
-        '''
+
         if getattr(self.config, "tie_word_embeddings", True): 
+            print("word embeddings are tied")
             output_embeddings = self.get_output_embeddings()
             if output_embeddings is not None:
                 self._tie_or_clone_weights(output_embeddings, self.get_input_embeddings())
-        '''
 
         if getattr(self.config, "is_encoder_decoder", False) and getattr(self.config, "tie_encoder_decoder", False):
             if hasattr(self, self.base_model_prefix):
@@ -3107,11 +3104,17 @@ class PreTrainedModel(nn.Module, ModuleUtilsMixin, GenerationMixin, PushToHubMix
             print("loaded_keys", loaded_keys)
             print("expected_keys_not_prefixed", expected_keys_not_prefixed)
             print("base_model_expected_keys", base_model_expected_keys)
-            if any(key in expected_keys_not_prefixed and key not in base_model_expected_keys for key in loaded_keys):
-                raise ValueError(
-                    "The state dictionary of the model you are trying to load is corrupted. Are you sure it was "
-                    "properly saved?"
-                )
+            for key in loaded_keys:
+                if key in expected_keys_not_prefixed and key not in base_model_expected_keys:
+                    if (key == "lm_head.weight"):
+                        print("ignoring lm_head.weight")
+                    else:
+                        raise ValueError(
+                            "The state dictionary of the model you are trying to load is corrupted. Are you sure it was "
+                            "properly saved?"
+                        )
+            #if any( for key in loaded_keys):
+                
             if device_map is not None:
                 device_map = {k.replace(f"{cls.base_model_prefix}.", ""): v for k, v in device_map.items()}
 
