@@ -700,8 +700,6 @@ class GPT2Model(GPT2PreTrainedModel):
         self.h = nn.ModuleList([GPT2Block(config, layer_idx=i) for i in range(config.num_hidden_layers)])
         self.ln_f = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_epsilon)
 
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-
         self.mlp1 = GPT2MLP(config.hidden_size, config) # recall this MLP has an intermediate dim same as embed
         self.mlp2 = AssymMLP(config.hidden_size * 2, config.hidden_size, config)
 
@@ -875,31 +873,30 @@ class GPT2Model(GPT2PreTrainedModel):
             hidden_states = hidden_states + token_type_embeds
 
         hidden_states = self.drop(hidden_states)
+        curr_seq_len = hidden_states.shape[1]
+        #print("hidden_states shape", hidden_states.shape)
+        #print("curr_seq_len", curr_seq_len)
 
         # We do our summing of the embeddings on hidden_states, 
         # after position_embeds are added & dropout is done
         start_token = hidden_states[:,0,:]
         tok_1 = hidden_states[:,1::3,:]
-        num_note_tokens = tok_1.shape[1] 
         tok_2 = hidden_states[:,2::3,:]
-        print("num_note_tokens", num_note_tokens, "tok_2 shape", tok_2.shape)
-        tok_2 = nn.functional.pad(input=tok_2, pad=(0,0,0,max(0, num_note_tokens-tok_2.shape[1]),0,0), mode='constant', value=0)
         tok_3 = hidden_states[:,3::3,:]
-        print("num_note_tokens", num_note_tokens, "tok_3 shape", tok_3.shape)
-        tok_3 = nn.functional.pad(input=tok_3, pad=(0,0,0,max(0, num_note_tokens-tok_3.shape[1]),0,0), mode='constant', value=0)
+        num_note_tokens = tok_3.shape[1] 
 
-        sum_states = tok_1 + tok_2 + tok_3
+        sum_states = tok_1[:,:num_note_tokens,:] + tok_2[:,:num_note_tokens,:] + tok_3
 
         hidden_states = torch.cat([start_token[:,None,:], sum_states], dim=1)
 
-        z1_states = torch.cat([start_token[:,None,:], tok_1], dim=1)
-        z2_states = torch.dstack((z1_states, torch.cat([start_token[:,None,:], tok_2], dim=1)))
+        z1_states = torch.cat([start_token[:,None,:], tok_1[:,:num_note_tokens,:]], dim=1)
+        z2_states = torch.dstack((z1_states, torch.cat([start_token[:,None,:], tok_2[:,:num_note_tokens,:]], dim=1)))
 
         output_shape = hidden_states.shape 
 
-        print("hf hidden_states", hidden_states)
-        print("hf z1_states", z1_states)
-        print("hf z2_states", z2_states)
+        #print("hf hidden_states", hidden_states)
+        #print("hf z1_states", z1_states)
+        #print("hf z2_states", z2_states)
 
         if self.gradient_checkpointing and self.training:
             if use_cache:
@@ -987,15 +984,19 @@ class GPT2Model(GPT2PreTrainedModel):
         state1 = hidden_states + z1_states
         state2 = hidden_states + z2_states
 
-        print("hf state0", state0)
-        print("hf state1", state1)
-        print("hf state2", state2)
+        #print("hf state0", state0)
+        #print("hf state1", state1)
+        #print("hf state2", state2)
 
         hidden_states = torch.dstack((state0, state1, state2))
         hidden_states = hidden_states.reshape((hidden_states.shape[0], hidden_states.shape[1] * 3, -1))
 
-        hidden_states = hidden_states[:,:-2,:]
-        print("hf pre_unembed", hidden_states)
+        if curr_seq_len % 3 == 1:
+            hidden_states = hidden_states[:,:-2,:]
+        if curr_seq_len % 3 == 2:
+            hidden_states = hidden_states[:,:-1,:]
+        
+        #print("hf pre_unembed", hidden_states)
 
         if not return_dict:
             return tuple(
@@ -1027,6 +1028,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.transformer = GPT2Model(config)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         # Model parallel
         self.model_parallel = False
@@ -1051,7 +1053,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         )
         assert_device_map(self.device_map, len(self.transformer.h))
         self.transformer.parallelize(self.device_map)
-        self.transformer.lm_head = self.transformer.lm_head.to(self.transformer.first_device)
+        self.lm_head = self.lm_head.to(self.first_device)
         self.model_parallel = True
 
     @add_start_docstrings(DEPARALLELIZE_DOCSTRING)
@@ -1062,13 +1064,13 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         )
         self.transformer.deparallelize()
         self.transformer = self.transformer.to("cpu")
-        self.transformer.lm_head = self.transformer.lm_head.to("cpu")
+        self.lm_head = self.lm_head.to("cpu")
         self.model_parallel = False
         torch.cuda.empty_cache()
 
     def get_output_embeddings(self):
         print("called get_output_embeddings")
-        return self.transformer.lm_head
+        return self.lm_head
     
     def set_output_embeddings(self, new_embeddings):
         print("called set_output_embeddings, new_embeddings shape", new_embeddings.shape)
@@ -1163,9 +1165,9 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         # Set device for model parallelism
         if self.model_parallel:
             torch.cuda.set_device(self.transformer.first_device)
-            hidden_states = hidden_states.to(self.transformer.lm_head.weight.device)
+            hidden_states = hidden_states.to(self.lm_head.weight.device)
 
-        lm_logits = self.transformer.lm_head(hidden_states)
+        lm_logits = self.lm_head(hidden_states)
 
         loss = None
         if labels is not None:
