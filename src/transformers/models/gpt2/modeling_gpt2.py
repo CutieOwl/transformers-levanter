@@ -866,10 +866,13 @@ class GPT2Model(GPT2PreTrainedModel):
         num_tokens_1 = max(0, hidden_states.shape[1] // 3)
         num_tokens_2 = max(0, (hidden_states.shape[1]-1) // 3)
         ##print("num_tokens_1", num_tokens_1, "num_tokens_2", num_tokens_2)
-        sum_states = hidden_states[:,1::3,:]
+        sum_states = hidden_states[:,3::3,:]
+        num_tokens = sum_states.shape[1]
+
+        state1 = hidden_states[:,1::3,:]
+        state2 = hidden_states[:,2::3,:]
         ##print("sum_states shape", sum_states.shape)
-        sum_states[:,:num_tokens_1,:] += hidden_states[:,2::3,:]
-        sum_states[:,:num_tokens_2,:] += hidden_states[:,3::3,:]
+        sum_states += state1[:,:num_tokens,:] + state2[:,:num_tokens,:]
         
         #raw_1 = hidden_states[:,1:,:]
         #raw_1 = raw_1.reshape((raw_1.shape[0], raw_1.shape[1] // 3, 3, -1))
@@ -1116,6 +1119,9 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
+        #print("input_ids shape", input_ids.shape)
+        curr_seq_len = input_ids.shape[1]
+
         transformer_outputs = self.transformer(
             input_ids,
             past_key_values=past_key_values,
@@ -1152,7 +1158,10 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         lm_logits[:,0::3,:] = lm_logits_0
         lm_logits[:,1::3,:] = lm_logits_1
         lm_logits[:,2::3,:] = lm_logits_2
-        lm_logits = lm_logits[:,:-2,:]
+        if curr_seq_len % 3 == 1:
+            lm_logits = lm_logits[:,:-2,:]
+        if curr_seq_len % 3 == 2:
+            lm_logits = lm_logits[:,:-1,:]
         #print("lm logits shape", lm_logits.shape)   
         #print("hf lm_logits", lm_logits)
 
