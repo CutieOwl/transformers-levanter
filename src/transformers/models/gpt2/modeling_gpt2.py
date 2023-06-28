@@ -101,7 +101,7 @@ def load_tf_weights_in_gpt2(model, config, gpt2_checkpoint_path):
                 pointer = getattr(pointer, "weight")
             elif scope_names[0] == "b":
                 pointer = getattr(pointer, "bias")
-            elif scope_names[0] == "wpe" or scope_names[0] == "wte":
+            elif scope_names[0] == "wte": # scope_names[0] == "wpe" or 
                 pointer = getattr(pointer, scope_names[0])
                 pointer = getattr(pointer, "weight")
             else:
@@ -676,7 +676,7 @@ class GPT2Model(GPT2PreTrainedModel):
         self.embed_dim = config.hidden_size
 
         self.wte = nn.Embedding(config.vocab_size, self.embed_dim)
-        self.wpe = nn.Embedding(config.max_position_embeddings, self.embed_dim)
+        # self.wpe = nn.Embedding(config.max_position_embeddings, self.embed_dim)
 
         self.drop = nn.Dropout(config.embd_pdrop)
         self.h = nn.ModuleList([GPT2Block(config, layer_idx=i) for i in range(config.num_hidden_layers)])
@@ -708,7 +708,7 @@ class GPT2Model(GPT2PreTrainedModel):
         self.first_device = "cpu" if "cpu" in self.device_map.keys() else "cuda:" + str(min(self.device_map.keys()))
         self.last_device = "cuda:" + str(max(self.device_map.keys()))
         self.wte = self.wte.to(self.first_device)
-        self.wpe = self.wpe.to(self.first_device)
+        # self.wpe = self.wpe.to(self.first_device)
         # Load onto devices
         for k, v in self.device_map.items():
             for block in v:
@@ -728,7 +728,7 @@ class GPT2Model(GPT2PreTrainedModel):
         self.first_device = "cpu"
         self.last_device = "cpu"
         self.wte = self.wte.to("cpu")
-        self.wpe = self.wpe.to("cpu")
+        # self.wpe = self.wpe.to("cpu")
         for index in range(len(self.h)):
             self.h[index] = self.h[index].to("cpu")
         self.ln_f = self.ln_f.to("cpu")
@@ -843,8 +843,8 @@ class GPT2Model(GPT2PreTrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.wte(input_ids)
-        position_embeds = self.wpe(position_ids)
-        hidden_states = inputs_embeds + position_embeds
+        # position_embeds = self.wpe(position_ids)
+        hidden_states = inputs_embeds # + position_embeds
 
         if token_type_ids is not None:
             token_type_embeds = self.wte(token_type_ids)
