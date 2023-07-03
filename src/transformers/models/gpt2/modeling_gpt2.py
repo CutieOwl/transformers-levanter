@@ -835,6 +835,40 @@ class GPT2Model(GPT2PreTrainedModel):
         else:
             encoder_attention_mask = None
 
+        # ALiBi
+        def get_slopes(n):
+            def get_slopes_power_of_2(n):
+                start = (2**(-2**-(math.log2(n)-3)))
+                ratio = start
+                return [start*ratio**i for i in range(n)]
+
+            if math.log2(n).is_integer():
+                return get_slopes_power_of_2(n)                   #In the paper, we only train models that have 2^a heads for some a. This function has
+            else:                                                 #some good properties that only occur when the input is a power of 2. To maintain that even
+                closest_power_of_2 = 2**math.floor(math.log2(n))  #when the number of heads is not a power of 2, we use this workaround. 
+                return get_slopes_power_of_2(closest_power_of_2) + get_slopes(2*closest_power_of_2)[0::2][:n-closest_power_of_2]
+ 
+        maxpos = self.config.max_position_embeddings
+        attn_heads = self.config.num_attention_heads
+        self.slopes = torch.Tensor(get_slopes(attn_heads))
+        #In the next line, the part after the * is what constructs the diagonal matrix (right matrix in Figure 3 in the paper). 
+        #If you run it you'll see that it doesn't exactly print out the same matrix as we have in Figure 3, but one where all rows are identical.
+        #This works because the softmax operation is invariant to translation, and our bias functions are always linear. 
+        self.alibi = self.slopes.unsqueeze(1).unsqueeze(1) * torch.arange(maxpos).unsqueeze(0).unsqueeze(0).expand(attn_heads, -1, -1)
+        self.alibi = self.alibi.view(attn_heads, 1, maxpos)
+        self.alibi = self.alibi.repeat(self.config.max_position_embeddings//maxpos, 1, 1)  # batch_size, 1, 1
+
+        # add ALiBi to attention mask
+        if attention_mask is not None:
+            attention_mask = attention_mask + self.alibi
+        else:
+            attention_mask = self.alibi
+
+        if encoder_attention_mask is not None:
+            encoder_attention_mask = encoder_attention_mask + self.alibi
+        else:
+            encoder_attention_mask = self.alibi
+
         # Prepare head mask if needed
         # 1.0 in head_mask indicate we keep the head
         # attention_probs has shape bsz x n_heads x N x N
