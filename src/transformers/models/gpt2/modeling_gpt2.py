@@ -202,7 +202,7 @@ class GPT2Attention(nn.Module):
                 # we need to increase size of bias array, increase by max_positions each time
                 old_bias_length = self.bias.shape[3]
                 new_bias = torch.tril(torch.ones((self.max_positions + old_bias_length, self.max_positions + old_bias_length), dtype=torch.bool)).view(
-                                1, 1, self.max_positions + old_bias_length, self.max_position + old_bias_length
+                                1, 1, self.max_positions + old_bias_length, self.max_positions + old_bias_length
                             )
                 self.bias = new_bias.type_as(self.bias)
                 print("new bias shape", self.bias.shape)
@@ -260,7 +260,7 @@ class GPT2Attention(nn.Module):
                 # we need to increase size of bias array, increase by max_positions each time
                 old_bias_length = self.bias.shape[3]
                 self.bias = torch.tril(torch.ones((self.max_positions + old_bias_length, self.max_positions + old_bias_length), dtype=torch.bool)).view(
-                                1, 1, self.max_positions + old_bias_length, self.max_position + old_bias_length
+                                1, 1, self.max_positions + old_bias_length, self.max_positions + old_bias_length
                             )
             causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length]
             mask_value = torch.finfo(attn_weights.dtype).min
