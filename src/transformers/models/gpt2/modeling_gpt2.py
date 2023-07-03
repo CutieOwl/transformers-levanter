@@ -182,6 +182,7 @@ class GPT2Attention(nn.Module):
 
     def _attn(self, query, key, value, attention_mask=None, head_mask=None):
         attn_weights = torch.matmul(query, key.transpose(-1, -2))
+        print("attn weights shape", attn_weights.shape)
 
         if self.scale_attn_weights:
             attn_weights = attn_weights / torch.full(
@@ -195,6 +196,8 @@ class GPT2Attention(nn.Module):
         if not self.is_cross_attention:
             # if only "normal" attention layer implements causal mask
             query_length, key_length = query.size(-2), key.size(-2)
+            print("query length", query_length, "key length", key_length)
+            print("bias shape", self.bias.shape)
             causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length]
             mask_value = torch.finfo(attn_weights.dtype).min
             # Need to be a tensor, otherwise we get error: `RuntimeError: expected scalar type float but found double`.
