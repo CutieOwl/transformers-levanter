@@ -857,6 +857,7 @@ class GPT2Model(GPT2PreTrainedModel):
         self.alibi = self.slopes.unsqueeze(1).unsqueeze(1) * torch.arange(maxpos).unsqueeze(0).unsqueeze(0).expand(attn_heads, -1, -1)
         self.alibi = self.alibi.view(attn_heads, 1, maxpos)
         self.alibi = self.alibi.repeat(self.config.max_position_embeddings//maxpos, 1, 1)  # batch_size, 1, 1
+        self.alibi = self.alibi.to(attention_mask.device)
 
         # add ALiBi to attention mask
         if attention_mask is not None:
