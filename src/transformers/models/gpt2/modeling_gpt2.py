@@ -155,7 +155,8 @@ class GPT2Attention(nn.Module):
         #This works because the softmax operation is invariant to translation, and our bias functions are always linear. 
         self.alibi = self.slopes.unsqueeze(1).unsqueeze(1) * torch.arange(self.max_positions).unsqueeze(0).unsqueeze(0).expand(self.attn_heads, -1, -1)
         self.alibi = self.alibi.view(self.attn_heads, 1, self.max_positions)
-        
+        self.alibi = self.alibi.repeat(1, self.max_positions, 1)
+
         self.embed_dim = config.hidden_size
         self.num_heads = config.num_attention_heads
         self.head_dim = self.embed_dim // self.num_heads
@@ -227,6 +228,7 @@ class GPT2Attention(nn.Module):
 
                 self.alibi = self.slopes.unsqueeze(1).unsqueeze(1) * torch.arange(new_bias_length).unsqueeze(0).unsqueeze(0).expand(self.attn_heads, -1, -1)
                 self.alibi = self.alibi.view(self.attn_heads, 1, new_bias_length)
+                self.alibi = self.alibi.repeat(1, new_bias_length, 1)
                 print("new bias shape", self.bias.shape)
             causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length]
             mask_value = torch.finfo(attn_weights.dtype).min
@@ -234,7 +236,7 @@ class GPT2Attention(nn.Module):
             # Need to be on the same device, otherwise `RuntimeError: ..., x and y to be on the same device`
             mask_value = torch.full([], mask_value, dtype=attn_weights.dtype).to(attn_weights.device)
             attn_weights = torch.where(causal_mask, attn_weights.to(attn_weights.dtype), mask_value)
-            alibi_value = self.alibi[:, :, :key_length].to(attn_weights.device)
+            alibi_value = self.alibi[:, key_length - query_length : key_length, :key_length].to(attn_weights.device)
             attn_weights = attn_weights + alibi_value
 
         if attention_mask is not None:
@@ -291,6 +293,7 @@ class GPT2Attention(nn.Module):
 
                 self.alibi = self.slopes.unsqueeze(1).unsqueeze(1) * torch.arange(new_bias_length).unsqueeze(0).unsqueeze(0).expand(self.attn_heads, -1, -1)
                 self.alibi = self.alibi.view(self.attn_heads, 1, new_bias_length)
+                self.alibi = self.alibi.repeat(1, new_bias_length, 1)
 
                 self.bias = new_bias.type_as(self.bias)
                 print("new bias shape", self.bias.shape)
@@ -300,7 +303,7 @@ class GPT2Attention(nn.Module):
             # Need to be on the same device, otherwise `RuntimeError: ..., x and y to be on the same device`
             mask_value = torch.tensor(mask_value, dtype=attn_weights.dtype).to(attn_weights.device)
             attn_weights = torch.where(causal_mask, attn_weights, mask_value)
-            alibi_value = self.alibi[:, :, :key_length].to(attn_weights.device)
+            alibi_value = self.alibi[:, key_length - query_length : key_length, :key_length].to(attn_weights.device)
             attn_weights = attn_weights + alibi_value
         if attention_mask is not None:
             # Apply the attention mask
