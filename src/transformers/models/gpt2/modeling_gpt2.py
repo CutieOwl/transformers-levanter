@@ -125,16 +125,37 @@ class GPT2Attention(nn.Module):
     def __init__(self, config, is_cross_attention=False, layer_idx=None):
         super().__init__()
 
-        max_positions = config.max_position_embeddings
+        self.max_positions = config.max_position_embeddings
         self.register_buffer(
             "bias",
-            torch.tril(torch.ones((max_positions, max_positions), dtype=torch.bool)).view(
-                1, 1, max_positions, max_positions
+            torch.tril(torch.ones((self.max_positions, self.max_positions), dtype=torch.bool)).view(
+                1, 1, self.max_positions, self.max_positions
             ),
             persistent=False,
         )
         self.register_buffer("masked_bias", torch.tensor(-1e4), persistent=False)
+ 
+        # ALiBi
+        def get_slopes(n):
+            def get_slopes_power_of_2(n):
+                start = (2**(-2**-(math.log2(n)-3)))
+                ratio = start
+                return [start*ratio**i for i in range(n)]
 
+            if math.log2(n).is_integer():
+                return get_slopes_power_of_2(n)                   #In the paper, we only train models that have 2^a heads for some a. This function has
+            else:                                                 #some good properties that only occur when the input is a power of 2. To maintain that even
+                closest_power_of_2 = 2**math.floor(math.log2(n))  #when the number of heads is not a power of 2, we use this workaround. 
+                return get_slopes_power_of_2(closest_power_of_2) + get_slopes(2*closest_power_of_2)[0::2][:n-closest_power_of_2]
+
+        self.attn_heads = config.num_attention_heads
+        self.slopes = torch.Tensor(get_slopes(self.attn_heads))
+        #In the next line, the part after the * is what constructs the diagonal matrix (right matrix in Figure 3 in the paper). 
+        #If you run it you'll see that it doesn't exactly print out the same matrix as we have in Figure 3, but one where all rows are identical.
+        #This works because the softmax operation is invariant to translation, and our bias functions are always linear. 
+        self.alibi = self.slopes.unsqueeze(1).unsqueeze(1) * torch.arange(self.max_positions).unsqueeze(0).unsqueeze(0).expand(self.attn_heads, -1, -1)
+        self.alibi = self.alibi.view(self.attn_heads, 1, self.max_positions)
+        
         self.embed_dim = config.hidden_size
         self.num_heads = config.num_attention_heads
         self.head_dim = self.embed_dim // self.num_heads
@@ -195,12 +216,26 @@ class GPT2Attention(nn.Module):
         if not self.is_cross_attention:
             # if only "normal" attention layer implements causal mask
             query_length, key_length = query.size(-2), key.size(-2)
+            if self.bias.shape[3] <= key_length:
+                # we need to increase size of bias array, increase by max_positions each time
+                old_bias_length = self.bias.shape[3]
+                new_bias_length = old_bias_length + self.max_positions
+                new_bias = torch.tril(torch.ones((new_bias_length, new_bias_length), dtype=torch.bool)).view(
+                                1, 1, new_bias_length, new_bias_length
+                            )
+                self.bias = new_bias.type_as(self.bias)
+
+                self.alibi = self.slopes.unsqueeze(1).unsqueeze(1) * torch.arange(new_bias_length).unsqueeze(0).unsqueeze(0).expand(self.attn_heads, -1, -1)
+                self.alibi = self.alibi.view(self.attn_heads, 1, new_bias_length)
+                print("new bias shape", self.bias.shape)
             causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length]
             mask_value = torch.finfo(attn_weights.dtype).min
             # Need to be a tensor, otherwise we get error: `RuntimeError: expected scalar type float but found double`.
             # Need to be on the same device, otherwise `RuntimeError: ..., x and y to be on the same device`
             mask_value = torch.full([], mask_value, dtype=attn_weights.dtype).to(attn_weights.device)
             attn_weights = torch.where(causal_mask, attn_weights.to(attn_weights.dtype), mask_value)
+            alibi_value = self.alibi[:, :, :key_length].to(attn_weights.device)
+            attn_weights = attn_weights + alibi_value
 
         if attention_mask is not None:
             # Apply the attention mask
@@ -246,15 +281,30 @@ class GPT2Attention(nn.Module):
         if not self.is_cross_attention:
             # if only "normal" attention layer implements causal mask
             query_length, key_length = query.size(-2), key.size(-2)
+            if self.bias.shape[3] < key_length:
+                # we need to increase size of bias array, increase by max_positions each time
+                old_bias_length = self.bias.shape[3]
+                new_bias_length = old_bias_length + self.max_positions
+                new_bias = torch.tril(torch.ones((new_bias_length, new_bias_length), dtype=torch.bool)).view(
+                                1, 1, new_bias_length, new_bias_length
+                            )
+
+                self.alibi = self.slopes.unsqueeze(1).unsqueeze(1) * torch.arange(new_bias_length).unsqueeze(0).unsqueeze(0).expand(self.attn_heads, -1, -1)
+                self.alibi = self.alibi.view(self.attn_heads, 1, new_bias_length)
+
+                self.bias = new_bias.type_as(self.bias)
+                print("new bias shape", self.bias.shape)
             causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length]
             mask_value = torch.finfo(attn_weights.dtype).min
             # Need to be a tensor, otherwise we get error: `RuntimeError: expected scalar type float but found double`.
             # Need to be on the same device, otherwise `RuntimeError: ..., x and y to be on the same device`
             mask_value = torch.tensor(mask_value, dtype=attn_weights.dtype).to(attn_weights.device)
             attn_weights = torch.where(causal_mask, attn_weights, mask_value)
-
+            alibi_value = self.alibi[:, :, :key_length].to(attn_weights.device)
+            attn_weights = attn_weights + alibi_value
         if attention_mask is not None:
             # Apply the attention mask
+            attention_mask = attention_mask.to(attn_weights.device)
             attn_weights = attn_weights + attention_mask
 
         attn_weights = nn.functional.softmax(attn_weights, dim=-1)
@@ -300,6 +350,7 @@ class GPT2Attention(nn.Module):
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
     ) -> Tuple[Union[torch.Tensor, Tuple[torch.Tensor]], ...]:
+    
         if encoder_hidden_states is not None:
             if not hasattr(self, "q_attn"):
                 raise ValueError(
@@ -835,41 +886,6 @@ class GPT2Model(GPT2PreTrainedModel):
             encoder_attention_mask = self.invert_attention_mask(encoder_attention_mask)
         else:
             encoder_attention_mask = None
-
-        # ALiBi
-        def get_slopes(n):
-            def get_slopes_power_of_2(n):
-                start = (2**(-2**-(math.log2(n)-3)))
-                ratio = start
-                return [start*ratio**i for i in range(n)]
-
-            if math.log2(n).is_integer():
-                return get_slopes_power_of_2(n)                   #In the paper, we only train models that have 2^a heads for some a. This function has
-            else:                                                 #some good properties that only occur when the input is a power of 2. To maintain that even
-                closest_power_of_2 = 2**math.floor(math.log2(n))  #when the number of heads is not a power of 2, we use this workaround. 
-                return get_slopes_power_of_2(closest_power_of_2) + get_slopes(2*closest_power_of_2)[0::2][:n-closest_power_of_2]
- 
-        maxpos = self.config.max_position_embeddings
-        attn_heads = self.config.num_attention_heads
-        self.slopes = torch.Tensor(get_slopes(attn_heads))
-        #In the next line, the part after the * is what constructs the diagonal matrix (right matrix in Figure 3 in the paper). 
-        #If you run it you'll see that it doesn't exactly print out the same matrix as we have in Figure 3, but one where all rows are identical.
-        #This works because the softmax operation is invariant to translation, and our bias functions are always linear. 
-        self.alibi = self.slopes.unsqueeze(1).unsqueeze(1) * torch.arange(maxpos).unsqueeze(0).unsqueeze(0).expand(attn_heads, -1, -1)
-        self.alibi = self.alibi.view(attn_heads, 1, maxpos)
-        self.alibi = self.alibi.repeat(self.config.max_position_embeddings//maxpos, 1, 1)  # batch_size, 1, 1
-        #self.alibi = self.alibi.to(attention_mask.device)
-
-        # add ALiBi to attention mask
-        if attention_mask is not None:
-            attention_mask = attention_mask + self.alibi
-        else:
-            attention_mask = self.alibi
-
-        if encoder_attention_mask is not None:
-            encoder_attention_mask = encoder_attention_mask + self.alibi
-        else:
-            encoder_attention_mask = self.alibi
 
         # Prepare head mask if needed
         # 1.0 in head_mask indicate we keep the head
