@@ -198,7 +198,7 @@ class GPT2Attention(nn.Module):
             query_length, key_length = query.size(-2), key.size(-2)
             #print("query length", query_length, "key length", key_length)
             #print("bias shape", self.bias.shape, "bias 3", self.bias.shape[3])
-            if self.bias.shape[3] <= key_length:
+            if self.bias.shape[3] < key_length:
                 # we need to increase size of bias array, increase by max_positions each time
                 old_bias_length = self.bias.shape[3]
                 new_bias = torch.tril(torch.ones((self.max_positions + old_bias_length, self.max_positions + old_bias_length), dtype=torch.bool)).view(
