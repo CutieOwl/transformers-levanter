@@ -101,7 +101,7 @@ def load_tf_weights_in_gpt2(model, config, gpt2_checkpoint_path):
                 pointer = getattr(pointer, "weight")
             elif scope_names[0] == "b":
                 pointer = getattr(pointer, "bias")
-            elif scope_names[0] == "wpe" or scope_names[0] == "wte":
+            elif scope_names[0] == "wte": #or scope_names[0] == "wte":
                 pointer = getattr(pointer, scope_names[0])
                 pointer = getattr(pointer, "weight")
             else:
@@ -125,7 +125,7 @@ class GPT2Attention(nn.Module):
     def __init__(self, config, is_cross_attention=False, layer_idx=None):
         super().__init__()
 
-        max_positions = 342 #config.max_position_embeddings
+        max_positions = 2048 #config.max_position_embeddings
         self.register_buffer(
             "bias",
             torch.tril(torch.ones((max_positions, max_positions), dtype=torch.bool)).view(
@@ -195,6 +195,16 @@ class GPT2Attention(nn.Module):
         if not self.is_cross_attention:
             # if only "normal" attention layer implements causal mask
             query_length, key_length = query.size(-2), key.size(-2)
+
+            if self.bias.shape[3] < key_length:
+                # we need to increase size of bias array, increase by max_positions each time
+                old_bias_length = self.bias.shape[3]
+                new_bias = torch.tril(torch.ones((self.max_positions + old_bias_length, self.max_positions + old_bias_length), dtype=torch.bool)).view(
+                                1, 1, self.max_positions + old_bias_length, self.max_positions + old_bias_length
+                            )
+                self.bias = new_bias.type_as(self.bias)
+                print("new bias shape", self.bias.shape)
+
             causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length]
             mask_value = torch.finfo(attn_weights.dtype).min
             # Need to be a tensor, otherwise we get error: `RuntimeError: expected scalar type float but found double`.
@@ -246,6 +256,12 @@ class GPT2Attention(nn.Module):
         if not self.is_cross_attention:
             # if only "normal" attention layer implements causal mask
             query_length, key_length = query.size(-2), key.size(-2)
+            if self.bias.shape[3] < key_length:
+                # we need to increase size of bias array, increase by max_positions each time
+                old_bias_length = self.bias.shape[3]
+                self.bias = torch.tril(torch.ones((self.max_positions + old_bias_length, self.max_positions + old_bias_length), dtype=torch.bool)).view(
+                                1, 1, self.max_positions + old_bias_length, self.max_positions + old_bias_length
+                            )
             causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length]
             mask_value = torch.finfo(attn_weights.dtype).min
             # Need to be a tensor, otherwise we get error: `RuntimeError: expected scalar type float but found double`.
@@ -677,7 +693,7 @@ class GPT2Model(GPT2PreTrainedModel):
         self.embed_dim = config.hidden_size
 
         self.wte = nn.Embedding(config.vocab_size, self.embed_dim)
-        self.wpe = nn.Embedding(1024, self.embed_dim) # nn.Embedding(config.max_position_embeddings, self.embed_dim) 
+        #self.wpe = nn.Embedding(1024, self.embed_dim) # nn.Embedding(config.max_position_embeddings, self.embed_dim) 
 
         self.drop = nn.Dropout(config.embd_pdrop)
         self.h = nn.ModuleList([GPT2Block(config, layer_idx=i) for i in range(config.num_hidden_layers)])
@@ -686,6 +702,7 @@ class GPT2Model(GPT2PreTrainedModel):
         self.lm_head0 = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.lm_head1 = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.lm_head2 = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.lm_head3 = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         # Model parallel
         self.model_parallel = False
@@ -713,7 +730,7 @@ class GPT2Model(GPT2PreTrainedModel):
         self.first_device = "cpu" if "cpu" in self.device_map.keys() else "cuda:" + str(min(self.device_map.keys()))
         self.last_device = "cuda:" + str(max(self.device_map.keys()))
         self.wte = self.wte.to(self.first_device)
-        self.wpe = self.wpe.to(self.first_device)
+        # self.wpe = self.wpe.to(self.first_device)
         # Load onto devices
         for k, v in self.device_map.items():
             for block in v:
@@ -733,7 +750,7 @@ class GPT2Model(GPT2PreTrainedModel):
         self.first_device = "cpu"
         self.last_device = "cpu"
         self.wte = self.wte.to("cpu")
-        self.wpe = self.wpe.to("cpu")
+        # self.wpe = self.wpe.to("cpu")
         for index in range(len(self.h)):
             self.h[index] = self.h[index].to("cpu")
         self.ln_f = self.ln_f.to("cpu")
@@ -849,8 +866,10 @@ class GPT2Model(GPT2PreTrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.wte(input_ids)
-        position_embeds = self.wpe(position_ids)
-        hidden_states = inputs_embeds + position_embeds
+
+        # We don't use position embeddings at all
+        #position_embeds = self.wpe(position_ids)
+        hidden_states = inputs_embeds #+ position_embeds
 
         if token_type_ids is not None:
             token_type_embeds = self.wte(token_type_ids)
@@ -860,32 +879,16 @@ class GPT2Model(GPT2PreTrainedModel):
 
         # We do our summing of the embeddings on hidden_states, 
         # after position_embeds are added & dropout is done
-        start_token = hidden_states[:,0,:]
-        ##print("hidden_states shape", hidden_states.shape)
-        ##print("hf hidden_states before sum", hidden_states)
-        num_tokens_1 = max(0, hidden_states.shape[1] // 3)
-        num_tokens_2 = max(0, (hidden_states.shape[1]-1) // 3)
-        ##print("num_tokens_1", num_tokens_1, "num_tokens_2", num_tokens_2)
-        sum_states = hidden_states[:,3::3,:]
-        num_tokens = sum_states.shape[1]
-
-        state1 = hidden_states[:,1::3,:]
-        state2 = hidden_states[:,2::3,:]
-        ##print("sum_states shape", sum_states.shape)
-        sum_states += state1[:,:num_tokens,:] + state2[:,:num_tokens,:]
-        
-        #raw_1 = hidden_states[:,1:,:]
-        #raw_1 = raw_1.reshape((raw_1.shape[0], raw_1.shape[1] // 3, 3, -1))
-        #raw_1 = raw_1.sum(axis=-2)
-        #sum_states = hidden_states[:,1::3,:] + hidden_states[:,2::3,:] + hidden_states[:,3::3,:]
-        hidden_states = torch.cat([start_token[:,None,:], sum_states], dim=1)
-        #print("hf hidden_states after sum", hidden_states)
-
         #print("input_shape", input_shape)
-        #print("hidden_states.size", hidden_states.size)
-        #print("hidden_states.size(-1)", hidden_states.size(-1))
-        output_shape = hidden_states.shape # + (hidden_states.size(-1),)
-        #print("desired output shape", output_shape)
+        ##print("hidden_states shape", hidden_states.shape)
+        hidden_states_0 = hidden_states[:,0::4,:]
+        hidden_states_1 = hidden_states[:,1::4,:]
+        hidden_states_2 = hidden_states[:,2::4,:]
+        hidden_states_3 = hidden_states[:,3::4,:]
+        num_tokens = hidden_states_3.shape[1]
+        hidden_states = hidden_states_0[:,:num_tokens,:] + hidden_states_1[:,:num_tokens,:] + hidden_states_2[:,:num_tokens,:] + hidden_states_3[:,:num_tokens,:]
+        output_shape = hidden_states.shape
+        ##print("desired output shape", output_shape)
 
         if self.gradient_checkpointing and self.training:
             if use_cache:
@@ -991,7 +994,7 @@ class GPT2Model(GPT2PreTrainedModel):
     GPT2_START_DOCSTRING,
 )
 class GPT2LMHeadModel(GPT2PreTrainedModel):
-    _keys_to_ignore_on_load_missing = [r"lm_head0.weight", r"lm_head1.weight", r"lm_head2.weight"]
+    _keys_to_ignore_on_load_missing = [r"lm_head0.weight", r"lm_head1.weight", r"lm_head2.weight", r"lm_head3.weight"]
     _keys_to_ignore_on_load_unexpected = [r"h\.\d+\.attn\.masked_bias", r"h\.\d+\.attn\.bias"]
 
     def __init__(self, config):
@@ -1024,6 +1027,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         self.transformer.lm_head0 = self.transformer.lm_head0.to(self.transformer.first_device)
         self.transformer.lm_head1 = self.transformer.lm_head1.to(self.transformer.first_device)
         self.transformer.lm_head2 = self.transformer.lm_head2.to(self.transformer.first_device)
+        self.transformer.lm_head3 = self.transformer.lm_head3.to(self.transformer.first_device)
         self.model_parallel = True
 
     @add_start_docstrings(DEPARALLELIZE_DOCSTRING)
@@ -1037,12 +1041,13 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         self.transformer.lm_head0 = self.transformer.lm_head0.to("cpu")
         self.transformer.lm_head1 = self.transformer.lm_head1.to("cpu")
         self.transformer.lm_head2 = self.transformer.lm_head2.to("cpu")
+        self.transformer.lm_head3 = self.transformer.lm_head2.to("cpu")
         self.model_parallel = False
         torch.cuda.empty_cache()
 
     def get_output_embeddings(self):
         print("called get_output_embeddings")
-        return self.transformer.lm_head0, self.transformer.lm_head1, self.transformer.lm_head2
+        return self.transformer.lm_head0, self.transformer.lm_head1, self.transformer.lm_head2, self.transformer.lm_head2
 
     def set_output_embeddings(self, new_embeddings):
         print("called set_output_embeddings, new_embeddings shape", new_embeddings.shape)
@@ -1050,6 +1055,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         self.lm_head0 = new_embeddings[0]
         self.lm_head1 = new_embeddings[1]
         self.lm_head2 = new_embeddings[2]
+        self.lm_head2 = new_embeddings[3]
 
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, inputs_embeds=None, **kwargs):
         token_type_ids = kwargs.get("token_type_ids", None)
@@ -1119,9 +1125,12 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        #print("input_ids shape", input_ids.shape)
-        curr_seq_len = input_ids.shape[1]
-
+        ##print("input_ids shape", input_ids.shape)
+        curr_seq_len = input_ids.shape[0]
+        if len(input_ids.shape) >= 2:
+            curr_seq_len = input_ids.shape[1]
+        ##print("curr_seq_len", curr_seq_len)
+    
         transformer_outputs = self.transformer(
             input_ids,
             past_key_values=past_key_values,
@@ -1145,6 +1154,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             hidden_states = hidden_states.to(self.transformer.lm_head0.weight.device)
             self.transformer.lm_head1 = self.transformer.lm_head1.to(self.transformer.lm_head0.weight.device)
             self.transformer.lm_head2 = self.transformer.lm_head2.to(self.transformer.lm_head0.weight.device)
+            self.transformer.lm_head3 = self.transformer.lm_head3.to(self.transformer.lm_head0.weight.device)
 
         lm_logits_0 = self.transformer.lm_head0(hidden_states)
         #print("hf lm_logits_0", lm_logits_0)
@@ -1152,18 +1162,22 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         #print("hf lm_logits_1", lm_logits_1)
         lm_logits_2 = self.transformer.lm_head2(hidden_states)
         #print("hf lm_logits_2", lm_logits_2)
+        lm_logits_3 = self.transformer.lm_head3(hidden_states)
+        #print("hf lm_logits_3", lm_logits_2)
 
-        #print("lm_logits_0 shape", lm_logits_0.shape)
-        lm_logits = torch.ones((lm_logits_0.shape[0], lm_logits_0.shape[1] * 3, lm_logits_0.shape[2]))
-        lm_logits[:,0::3,:] = lm_logits_0
-        lm_logits[:,1::3,:] = lm_logits_1
-        lm_logits[:,2::3,:] = lm_logits_2
-        if curr_seq_len % 3 == 1:
-            lm_logits = lm_logits[:,:-2,:]
-        if curr_seq_len % 3 == 2:
-            lm_logits = lm_logits[:,:-1,:]
-        #print("lm logits shape", lm_logits.shape)   
-        #print("hf lm_logits", lm_logits)
+        ##print("lm_logits_0 shape", lm_logits_0.shape)
+        lm_logits = torch.ones((lm_logits_0.shape[0], lm_logits_0.shape[1] * 4, lm_logits_0.shape[2]))
+        ##print("lm_logits shape", lm_logits.shape)
+        lm_logits[:,0::4,:] = lm_logits_0
+        lm_logits[:,1::4,:] = lm_logits_1
+        lm_logits[:,2::4,:] = lm_logits_2
+        lm_logits[:,3::4,:] = lm_logits_3
+
+        cutoff = (4 - curr_seq_len % 4) % 4
+        ##print("cutoff", cutoff)
+        if cutoff != 0:
+            lm_logits = lm_logits[:,:-cutoff,:]
+        ##print("lm_logits shape", lm_logits.shape)
 
         loss = None
         if labels is not None:
