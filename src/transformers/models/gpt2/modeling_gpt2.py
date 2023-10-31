@@ -1172,12 +1172,13 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         lm_logits[:,1::4,:] = lm_logits_1
         lm_logits[:,2::4,:] = lm_logits_2
         lm_logits[:,3::4,:] = lm_logits_3
-
+        '''
         cutoff = (4 - curr_seq_len % 4) % 4
         ##print("cutoff", cutoff)
         if cutoff != 0:
             lm_logits = lm_logits[:,:-cutoff,:]
         ##print("lm_logits shape", lm_logits.shape)
+        '''
 
         loss = None
         if labels is not None:
