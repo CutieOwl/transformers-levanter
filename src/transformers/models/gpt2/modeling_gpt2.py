@@ -881,12 +881,14 @@ class GPT2Model(GPT2PreTrainedModel):
         # after position_embeds are added & dropout is done
         #print("input_shape", input_shape)
         ##print("hidden_states shape", hidden_states.shape)
+        ##print("input_shape", input_shape)
         hidden_states_0 = hidden_states[:,0::4,:]
         hidden_states_1 = hidden_states[:,1::4,:]
         hidden_states_2 = hidden_states[:,2::4,:]
         hidden_states_3 = hidden_states[:,3::4,:]
-        num_tokens = hidden_states_3.shape[1]
-        hidden_states = hidden_states_0[:,:num_tokens,:] + hidden_states_1[:,:num_tokens,:] + hidden_states_2[:,:num_tokens,:] + hidden_states_3[:,:num_tokens,:]
+        #num_tokens = hidden_states_3.shape[1]
+        #hidden_states = hidden_states_0[:,:num_tokens,:] + hidden_states_1[:,:num_tokens,:] + hidden_states_2[:,:num_tokens,:] + hidden_states_3[:,:num_tokens,:]
+        hidden_states = hidden_states_0 + hidden_states_1 + hidden_states_2 + hidden_states_3
         output_shape = hidden_states.shape
         ##print("desired output shape", output_shape)
 
@@ -1127,8 +1129,10 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
 
         ##print("input_ids shape", input_ids.shape)
         curr_seq_len = input_ids.shape[0]
+        use_batch = False
         if len(input_ids.shape) >= 2:
             curr_seq_len = input_ids.shape[1]
+            use_batch = True
         ##print("curr_seq_len", curr_seq_len)
     
         transformer_outputs = self.transformer(
@@ -1155,6 +1159,8 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             self.transformer.lm_head1 = self.transformer.lm_head1.to(self.transformer.lm_head0.weight.device)
             self.transformer.lm_head2 = self.transformer.lm_head2.to(self.transformer.lm_head0.weight.device)
             self.transformer.lm_head3 = self.transformer.lm_head3.to(self.transformer.lm_head0.weight.device)
+        
+        ##print("hf hidden_states shape", hidden_states.shape)
 
         lm_logits_0 = self.transformer.lm_head0(hidden_states)
         #print("hf lm_logits_0", lm_logits_0)
@@ -1172,6 +1178,10 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         lm_logits[:,1::4,:] = lm_logits_1
         lm_logits[:,2::4,:] = lm_logits_2
         lm_logits[:,3::4,:] = lm_logits_3
+        if not use_batch: 
+            # get rid of useless dimension 0
+            lm_logits = lm_logits.squeeze(0)
+    
         '''
         cutoff = (4 - curr_seq_len % 4) % 4
         ##print("cutoff", cutoff)
@@ -1179,6 +1189,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             lm_logits = lm_logits[:,:-cutoff,:]
         ##print("lm_logits shape", lm_logits.shape)
         '''
+        ##print("lm_logits shape", lm_logits.shape)
 
         loss = None
         if labels is not None:
