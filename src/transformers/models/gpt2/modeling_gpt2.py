@@ -693,7 +693,7 @@ class GPT2Model(GPT2PreTrainedModel):
         self.embed_dim = config.hidden_size
 
         self.wte = nn.Embedding(config.vocab_size, self.embed_dim)
-        #self.wpe = nn.Embedding(1024, self.embed_dim) # nn.Embedding(config.max_position_embeddings, self.embed_dim) 
+        self.wpe = nn.Embedding(1024, self.embed_dim) # nn.Embedding(config.max_position_embeddings, self.embed_dim) 
 
         self.drop = nn.Dropout(config.embd_pdrop)
         self.h = nn.ModuleList([GPT2Block(config, layer_idx=i) for i in range(config.num_hidden_layers)])
@@ -750,7 +750,7 @@ class GPT2Model(GPT2PreTrainedModel):
         self.first_device = "cpu"
         self.last_device = "cpu"
         self.wte = self.wte.to("cpu")
-        # self.wpe = self.wpe.to("cpu")
+        self.wpe = self.wpe.to("cpu")
         for index in range(len(self.h)):
             self.h[index] = self.h[index].to("cpu")
         self.ln_f = self.ln_f.to("cpu")
@@ -868,8 +868,8 @@ class GPT2Model(GPT2PreTrainedModel):
             inputs_embeds = self.wte(input_ids)
 
         # We don't use position embeddings at all
-        #position_embeds = self.wpe(position_ids)
-        hidden_states = inputs_embeds #+ position_embeds
+        position_embeds = self.wpe(position_ids)
+        hidden_states = inputs_embeds + position_embeds
 
         if token_type_ids is not None:
             token_type_embeds = self.wte(token_type_ids)
