@@ -693,7 +693,7 @@ class GPT2Model(GPT2PreTrainedModel):
         self.embed_dim = config.hidden_size
 
         self.wte = nn.Embedding(config.vocab_size, self.embed_dim)
-        self.wpe = nn.Embedding(1024, self.embed_dim) # nn.Embedding(config.max_position_embeddings, self.embed_dim) 
+        self.wpe = nn.Embedding(config.max_position_embeddings, self.embed_dim) #nn.Embedding(1024, self.embed_dim)
 
         self.drop = nn.Dropout(config.embd_pdrop)
         self.h = nn.ModuleList([GPT2Block(config, layer_idx=i) for i in range(config.num_hidden_layers)])
